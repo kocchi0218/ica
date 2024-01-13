@@ -1,54 +1,91 @@
 import streamlit as st
 import pandas as pd
+import openpyxl
+from io import BytesIO
 
+# ヘッダー
+st.title('生産スケジュールと点眼洗眼帳票分析アプリ')
 
+# ファイルアップロード
+uploaded_file_icare = st.file_uploader("アイケア変バリスケジュール管理ファイルをアップロードしてください", type=['xlsx'])
+uploaded_file_ueno = st.file_uploader("上野点眼洗眼帳票ファイルをアップロードしてください", type=['xlsx'])
 
-# アプリのタイトル
-st.title("Excelデータ検索アプリ")
+if uploaded_file_icare is not None and uploaded_file_ueno is not None:
+    # アイケア変バリスケジュール管理ファイルの読み込み
+    icare_workbook = openpyxl.load_workbook(BytesIO(uploaded_file_icare.read()), data_only=True)
+    icare_sheet = icare_workbook.active
 
-# ファイルアップローダーを作成
-uploaded_file = st.file_uploader("Excelファイルをドラッグ＆ドロップ、またはブラウズしてアップロードしてください", type=['xlsx', 'xls'])
+    # Extract data for 生産略称、対象、スケール
+    prod_abbrev_target_scale_items = []
+    for row in icare_sheet.iter_rows(min_row=4, min_col=2, max_col=4, max_row=icare_sheet.max_row):
+        prod_abbrev_value = row[0].value  # Column B (生産略称)
+        target_value = row[1].value      # Column C (対象)
+        scale_value = row[2].value       # Column D (スケール)
+        if prod_abbrev_value is not None and target_value is not None and scale_value is not None:
+            prod_abbrev_target_scale_items.append((prod_abbrev_value, target_value, scale_value))
 
-# 項目の選択肢
-items = [
-    "ALCP2MP調", "C3DF2調", "C3IC調製品", "C3M7調製品", "GED2調", "VACL2調",
-    "YLF4調", "YLZ調", "TEDT調", "TC3ED調", "PCR2調", "CYLACL調", "C3ED調", 
-    "C3A7調", "ALJ調", "ALCP4調"
-]
+    # Create DataFrame
+    df_prod_abbrev_target_scale = pd.DataFrame(prod_abbrev_target_scale_items, columns=['生産略称', '対象', 'スケール'])
 
-# ファイルがアップロードされたら処理を開始
-if uploaded_file is not None:
-    try:
-        # ファイルを読み込む
-        xls = pd.ExcelFile(uploaded_file)
-        sheet_names = xls.sheet_names
+    # 上野点眼洗眼帳票ファイルの読み込み
+    ueno_workbook = openpyxl.load_workbook(BytesIO(uploaded_file_ueno.read()), data_only=True)
+    ueno_sheet = ueno_workbook.active
 
-        # シート名を選択させる
-        sheet_name = st.selectbox("シートを選択してください", options=sheet_names)
+    # Set search conditions and execute search
+    prod_abbrev_items_for_search_with_scale = df_prod_abbrev_target_scale[
+        df_prod_abbrev_target_scale['対象'] == '調製'
+    ]['生産略称'].tolist()
 
-        # 選択したシートを読み込む
-        data = pd.read_excel(uploaded_file, sheet_name=sheet_name)
+    prod_abbrev_items_for_search_exact_with_scale = [item + '調' for item in prod_abbrev_items_for_search_with_scale] + \
+                                                    [item + '調製品' for item in prod_abbrev_items_for_search_with_scale] + \
+                                                    [item + '(輸ろ' for item in prod_abbrev_items_for_search_with_scale]
 
-        # 項目のセレクトボックスを作成
-        selected_item = st.selectbox("検索する項目を選択してください", options=items)
+    # Extract production line information
+    production_line_info = {
+        41: ueno_sheet.cell(row=4, column=41).value,  # Information in column 41
+        44: ueno_sheet.cell(row=4, column=44).value,  # Information in column 44
+        47: ueno_sheet.cell(row=4, column=47).value   # Information in column 47
+    }
 
-        # 検索ボタン
-        # 検索ボタン
-        if st.button("検索"):
-            search_data = data.iloc[:, 39:45].applymap(str)
-            # 指定された項目でフィルタリングし、A列のデータを抽出
-            filtered_indices = search_data.apply(lambda x: x.str.contains(selected_item, regex=False, na=False)).any(axis=1)
-            a_column_data = data.loc[filtered_indices, data.columns[0]]  # A列のデータをフィルタリングされたインデックスで取得
+    # Extract search results with production line info
+    exact_matches_with_A_col_with_scale_and_line = {}
+    for row in ueno_sheet.iter_rows(min_row=1, max_row=ueno_sheet.max_row):
+        for col_range_start, col_range_end, additional_col in [(41, 43, 42), (44, 46, 45), (47, 49, 48)]:
+            for col in range(col_range_start, col_range_end + 1):
+                cell_value = row[col-1].value
+                if cell_value and cell_value in prod_abbrev_items_for_search_exact_with_scale:
+                    line_info = production_line_info[col_range_start]
+                    additional_data = row[additional_col-1].value  # Data from the additional column
 
-    # 結果を表示
-            st.write("A列のデータ:")
-            st.dataframe(a_column_data)
+                    match_info = (row[0].value, line_info, additional_data)
+                    if cell_value in exact_matches_with_A_col_with_scale_and_line:
+                        exact_matches_with_A_col_with_scale_and_line[cell_value].append(match_info)
+                    else:
+                        exact_matches_with_A_col_with_scale_and_line[cell_value] = [match_info]
 
+    # Flatten the 'Match Info' into separate rows
+    flattened_data = []
+    for item, match_infos in exact_matches_with_A_col_with_scale_and_line.items():
+        for date, line, additional in match_infos:
+            flattened_data.append([item, date, line, additional])
 
-    # 結果を表示
-           
-   
-            
+    # Create a new DataFrame from the flattened data
+    df_flattened = pd.DataFrame(flattened_data, columns=['Item', 'Date', 'Production Line', 'Additional Data'])
 
-    except Exception as e:
-        st.error(f"エラーが発生しました: {e}")
+    # 生産ラインごとにデータフレームを分ける
+    grouped_by_line = df_flattened.groupby('Production Line')
+
+    # 各生産ラインのデータフレームを作成し、出力
+    df_line_1 = grouped_by_line.get_group('点眼調製1号(B3・B4）') if '点眼調製1号(B3・B4）' in grouped_by_line.groups else pd.DataFrame()
+    df_line_2 = grouped_by_line.get_group('点眼調製2号(B7・B8）') if '点眼調製2号(B7・B8）' in grouped_by_line.groups else pd.DataFrame()
+    df_line_3 = grouped_by_line.get_group('点眼調製3号(B0）') if '点眼調製3号(B0）' in grouped_by_line.groups else pd.DataFrame()
+
+    # 生産ラインごとのデータフレームを表示
+    st.header("点眼調製1号(B3・B4）のデータ:")
+    st.dataframe(df_line_1)
+
+    st.header("点眼調製2号(B7・B8）のデータ:")
+    st.dataframe(df_line_2)
+
+    st.header("点眼調製3号(B0）のデータ:")
+    st.dataframe(df_line_3)
