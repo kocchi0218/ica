@@ -6,6 +6,13 @@ from io import BytesIO
 # ヘッダー
 st.title('生産スケジュールと点眼洗眼帳票分析アプリ')
 
+def normalize_production_line_name(name):
+    """
+    Replace full-width brackets with half-width brackets in the production line name.
+    """
+    return name.replace('（', '(').replace('）', ')')
+
+
 # ファイルアップロード
 uploaded_file_icare = st.file_uploader("アイケア変バリスケジュール管理ファイルをアップロードしてください", type=['xlsx'])
 uploaded_file_ueno = st.file_uploader("上野点眼洗眼帳票ファイルをアップロードしてください", type=['xlsx'])
